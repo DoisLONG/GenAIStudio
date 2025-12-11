@@ -1,12 +1,10 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect } from 'react'
 import PropTypes from 'prop-types'
 import { useSelector } from 'react-redux'
 import moment from 'moment'
 import { styled } from '@mui/material/styles'
 import {
-    Box,
     Button,
-    Chip,
     CircularProgress,
     Paper,
     Skeleton,
@@ -20,9 +18,9 @@ import {
     TableSortLabel,
     Tooltip,
     Typography,
-    useTheme,
     Menu,
-    MenuItem
+    MenuItem,
+    useTheme,
 } from '@mui/material'
 import { tableCellClasses } from '@mui/material/TableCell'
 import FlowListMenu from '../button/FlowListMenu'
@@ -30,23 +28,21 @@ import { Link } from 'react-router-dom'
 import {
     OpenInNew,
     StopCircleOutlined,
-    Analytics,
     PlayCircleOutline,
-    UnarchiveOutlined,
+    Analytics,
     ViewTimelineOutlined,
     InstallDesktopOutlined,
     TroubleshootOutlined,
     TerminalOutlined
 } from '@mui/icons-material'
-
 import BuildDeploymentPackageDialog from '../dialog/BuildDeploymentPackageDialog'
 import OneClickDeploymentDialog from '../dialog/OneClickDeploymentDialog'
 import chatflowsApi from '@/api/chatflows'
 import config from '@/config'
+import { useTranslation } from 'react-i18next'
 
 const StyledTableCell = styled(TableCell)(({ theme }) => ({
     borderColor: theme.palette.grey[900] + 25,
-
     [`&.${tableCellClasses.head}`]: {
         color: theme.palette.grey[900]
     },
@@ -57,31 +53,37 @@ const StyledTableCell = styled(TableCell)(({ theme }) => ({
 }))
 
 const StyledTableRow = styled(TableRow)(() => ({
-    // hide last border
-    '&:last-child td, &:last-child th': {
-        border: 0
-    }
+    '&:last-child td, &:last-child th': { border: 0 }
 }))
 
 const getLocalStorageKeyName = (name, isAgentCanvas) => {
     return (isAgentCanvas ? 'agentcanvas' : 'chatflowcanvas') + '_' + name
 }
 
-export const FlowListTable = ({ data, images, isLoading, filterFunction, updateFlowsApi, setError, isAgentCanvas, isOpeaCanvas, stopSandboxApi, updateFlowToServerApi, userRole }) => {
-    // overwrite setError
-    setError = (error) => {
-        console.error(error)
-    }
-    // console.log ("table user", userRole)
+export const FlowListTable = ({
+    data, images, isLoading, filterFunction, updateFlowsApi, setError, isAgentCanvas,
+    isOpeaCanvas, stopSandboxApi, updateFlowToServerApi, userRole
+}) => {
+    const { t } = useTranslation()
     const theme = useTheme()
     const customization = useSelector((state) => state.customization)
+    setError = (error) => { console.error(error) }
 
     const localStorageKeyOrder = getLocalStorageKeyName('order', isAgentCanvas)
     const localStorageKeyOrderBy = getLocalStorageKeyName('orderBy', isAgentCanvas)
-
     const [order, setOrder] = useState(localStorage.getItem(localStorageKeyOrder) || 'desc')
     const [orderBy, setOrderBy] = useState(localStorage.getItem(localStorageKeyOrderBy) || 'updatedDate')
+    const [sortedData, setSortedData] = useState([])
 
+    // 状态国际化
+    const sandboxStatusText = (status) => {
+        if (status === "Not Running") return t('flowlist.notRunning')
+        if (status === "Ready") return t('flowlist.ready')
+        if (status === "Getting Ready") return t('flowlist.gettingReady')
+        if (status === "Stopping") return t('flowlist.stopping')
+        if (status === "Error") return t('flowlist.error')
+        return status
+    }
 
     const handleRequestSort = (property) => {
         const isAsc = orderBy === property && order === 'asc'
@@ -92,67 +94,57 @@ export const FlowListTable = ({ data, images, isLoading, filterFunction, updateF
         localStorage.setItem(localStorageKeyOrderBy, property)
     }
 
-    const [sortedData, setSortedData] = useState([]);
-
-    const handleSortData = () => {
-        if (!data) return [];
-        // console.log('handleSortData', data);
-        const sorted = [...data].map((row) => ({
-            ...row,
-            sandboxStatus: row.sandboxStatus || 'Not Running' // Ensure initial status
-        })).sort((a, b) => {
-            if (orderBy === 'name') {
-                return order === 'asc' ? (a.name || '').localeCompare(b.name || '') : (b.name || '').localeCompare(a.name || '');
-            } else if (orderBy === 'updatedDate') {
-                return order === 'asc'
-                    ? new Date(a.updatedDate) - new Date(b.updatedDate)
-                    : new Date(b.updatedDate) - new Date(a.updatedDate);
-            }
-            return 0;
-        });
-        return sorted;
-    };
-
+    // ---- WebSocket 相关核心逻辑 ----
     useEffect(() => {
-        console.log("triggering websocket")
         const openConnections = [];
         const openWebSocketConnection = (id, status, type = 'sandbox') => {
             let wsEndpoint = config.sandbox_status_endpoint;
             const ws = new WebSocket(`${config.studio_server_url}/${wsEndpoint}`);
             ws.onopen = () => {
-                let payload;
-                payload = JSON.stringify({ id: id, status: status });
+                let payload = JSON.stringify({ id: id, status: status });
                 ws.send(payload);
-                console.log('Connected to WebSocket server', id, type);
             };
             ws.onmessage = (event) => {
                 const data = JSON.parse(event.data);
-                console.log('Deployment status:', data.status, id, type);
-                if (data.status === 'Done' || data.status === 'Error' || data.status === 'Not Running' || data.status === 'Ready') {
+                if (['Done', 'Error', 'Not Running', 'Ready'].includes(data.status)) {
                     ws.close();
                     openConnections.splice(openConnections.indexOf(ws), 1);
-                    updateSandboxStatus(id, data.status, data.sandbox_app_url, data.sandbox_grafana_url, data.sandbox_tracer_url, data.sandbox_debuglogs_url);
-                    updateFlowToServerApi(id, { sandboxStatus: data.status, sandboxAppUrl: data.sandbox_app_url, sandboxGrafanaUrl: data.sandbox_grafana_url, sandboxTracerUrl: data.sandbox_tracer_url, sandboxDebugLogsUrl: data.sandbox_debuglogs_url });
+                    updateSandboxStatus(
+                        id, data.status,
+                        data.sandbox_app_url,
+                        data.sandbox_grafana_url,
+                        data.sandbox_tracer_url,
+                        data.sandbox_debuglogs_url
+                    );
+                    if (updateFlowToServerApi) {
+                        updateFlowToServerApi(id, {
+                            sandboxStatus: data.status,
+                            sandboxAppUrl: data.sandbox_app_url,
+                            sandboxGrafanaUrl: data.sandbox_grafana_url,
+                            sandboxTracerUrl: data.sandbox_tracer_url,
+                            sandboxDebugLogsUrl: data.sandbox_debuglogs_url
+                        });
+                    }
                 }
             };
-            ws.onclose = () => {
-                console.log('Disconnected from WebSocket server', id, type);
-            };
+            ws.onclose = () => {};
             return ws;
         };
-        sortedData.map((row) => {
+        // 只监听特殊状态的行
+        sortedData.forEach((row) => {
             if (row.sandboxStatus === 'Getting Ready' || row.sandboxStatus === 'Stopping') {
                 const ws = openWebSocketConnection(row.id, row.sandboxStatus);
                 openConnections.push(ws);
             }
         });
         return () => {
-            openConnections.forEach((ws) => {
-                ws.close();
-            });
+            openConnections.forEach((ws) => { ws.close(); });
         };
+        // eslint-disable-next-line
     }, [sortedData]);
+    // ---- end WebSocket ----
 
+    // 状态本地更新
     const updateSandboxStatus = (id, newStatus, sandboxAppUrl = null, sandboxGrafanaUrl = null, sandboxTracerUrl = null, sandboxDebugLogsUrl = null) => {
         setSortedData((prevData) =>
             prevData.map((row) =>
@@ -170,6 +162,7 @@ export const FlowListTable = ({ data, images, isLoading, filterFunction, updateF
         );
     };
 
+    // 各类操作事件
     const handleRunSandbox = async (id) => {
         updateSandboxStatus(id, 'Sending Request');
         const res = await chatflowsApi.deploySandbox(id)
@@ -182,7 +175,6 @@ export const FlowListTable = ({ data, images, isLoading, filterFunction, updateF
             res.data?.sandboxDebugLogsUrl
         );
     }
-
     const handleStopSandbox = async (id) => {
         updateSandboxStatus(id, 'Sending Request');
         const res = await stopSandboxApi(id)
@@ -197,109 +189,38 @@ export const FlowListTable = ({ data, images, isLoading, filterFunction, updateF
         }
     }
 
-    const [buildDeploymentPackageDialogOpen, setBuildDeploymentPackageDialogOpen] = useState(false)
-    const [buildDeploymentPackageDialogProps, setBuildDeploymentPackageDialogProps] = useState({})
-
-    const downloadDeploymentPackage = async (id, deploymentConfig) => {
-        console.log('downloadDeploymentPackage', id, deploymentConfig);
-        try {
-            const response = await chatflowsApi.buildDeploymentPackage(id, deploymentConfig, {
-                responseType: 'arraybuffer',
-            });
-            const blob = new Blob([response.data], { type: 'application/zip' });
-            const url = window.URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.style.display = 'none';
-            a.href = url;
-            a.download = `deployment_package_${id}.zip`;
-            document.body.appendChild(a);
-            a.click();
-            window.URL.revokeObjectURL(url);
-        } catch (error) {
-            console.error('Error downloading deployment package:', error);
-            setError(error);
-        }
-        setBuildDeploymentPackageDialogOpen(false)
-    }
-
-    const handleBuildDeploymentPackage = (id) => {
-        setBuildDeploymentPackageDialogProps({
-            id: id
-        })
-        setBuildDeploymentPackageDialogOpen(true)
-    }
-
-    const [oneClickDeploymentDialogOpen, setOneClickDeploymentDialogOpen] = useState(false)
-    const [oneClickDeploymentDialogProps, setOneClickDeploymentDialogProps] = useState({})
-
-    const oneClickDeployment = async (id, deploymentConfig) => {
-        try {
-            // Only call the backend API and return the response (including compose_dir)
-            const response = await chatflowsApi.clickDeployment(id, deploymentConfig)
-            return response.data; // Pass compose_dir and other info to the dialog
-        } catch (error) {
-            // Optionally show error
-            return { error: error?.message || 'Deployment failed' };
-        }
-    }
-
-    const handleOneClickDeployment = (id) => {
-        // Reset dialog state if switching to a different row
-        if (oneClickDeploymentDialogProps.id !== id) {
-            setOneClickDeploymentDialogProps({});
-            setOneClickDeploymentDialogOpen(false);
-            setTimeout(() => {
-                setOneClickDeploymentDialogProps({ id });
-                setOneClickDeploymentDialogOpen(true);
-            }, 0);
-        } else {
-            setOneClickDeploymentDialogProps({ id });
-            setOneClickDeploymentDialogOpen(true);
-        }
+    // 排序
+    const handleSortData = () => {
+        if (!data) return [];
+        const sorted = [...data].map((row) => ({
+            ...row,
+            sandboxStatus: row.sandboxStatus || 'Not Running'
+        })).sort((a, b) => {
+            if (orderBy === 'name') {
+                return order === 'asc' ? (a.name || '').localeCompare(b.name || '') : (b.name || '').localeCompare(a.name || '')
+            } else if (orderBy === 'updatedDate') {
+                return order === 'asc'
+                    ? new Date(a.updatedDate) - new Date(b.updatedDate)
+                    : new Date(b.updatedDate) - new Date(a.updatedDate)
+            }
+            return 0
+        });
+        return sorted;
     };
+    useEffect(() => { setSortedData(handleSortData()) }, [data, order, orderBy])
 
-    const [deployStatusById, setDeployStatusById] = useState({});
-    const [deployConfigById, setDeployConfigById] = useState({});
-
-    const setDeployStatusForId = (id, status) => {
-        setDeployStatusById((prev) => ({ ...prev, [id]: status }));
-    };
-
-    const setDeployConfigForId = (id, config) => {
-        setDeployConfigById((prev) => ({ ...prev, [id]: config }));
-    };
-
-    useEffect(() => {
-        setSortedData(handleSortData());
-    }, [data, order, orderBy]); // Run effect when any dependency changes
-
-    // const handleRequestSort = (property) => {
-    //     const isAsc = orderBy === property && order === 'asc';
-    //     setOrder(isAsc ? 'desc' : 'asc');
-    //     setOrderBy(property);
-    // };
-
-    // const sortedData = data
-    //     ? [...data].sort((a, b) => {
-    //           if (orderBy === 'name') {
-    //               return order === 'asc' ? (a.name || '').localeCompare(b.name || '') : (b.name || '').localeCompare(a.name || '')
-    //           } else if (orderBy === 'updatedDate') {
-    //               return order === 'asc'
-    //                   ? new Date(a.updatedDate) - new Date(b.updatedDate)
-    //                   : new Date(b.updatedDate) - new Date(a.updatedDate)
-    //           }
-    //           return 0
-    //       })
-    //     : []
-
-    const handleOpenUrl = (url) => {
-        console.log('Opening URL', url);
-        window.open(url, '_blank');
-    }
-
-    // Add state for observability menu
+    // observability menu
     const [observabilityAnchorEl, setObservabilityAnchorEl] = useState(null);
     const [observabilityRow, setObservabilityRow] = useState(null);
+    const handleOpenUrl = (url) => { window.open(url, '_blank'); }
+
+    // Dialog 控制
+    const [buildDeploymentPackageDialogOpen, setBuildDeploymentPackageDialogOpen] = useState(false)
+    const [buildDeploymentPackageDialogProps, setBuildDeploymentPackageDialogProps] = useState({})
+    const [oneClickDeploymentDialogOpen, setOneClickDeploymentDialogOpen] = useState(false)
+    const [oneClickDeploymentDialogProps, setOneClickDeploymentDialogProps] = useState({})
+    const [deployStatusById, setDeployStatusById] = useState({});
+    const [deployConfigById, setDeployConfigById] = useState({});
 
     return (
         <>
@@ -312,272 +233,127 @@ export const FlowListTable = ({ data, images, isLoading, filterFunction, updateF
                         }}
                     >
                         <TableRow>
-                            <StyledTableCell component='th' scope='row' style={{ width: '20%' }} key='0'>
+                            <StyledTableCell>
                                 <TableSortLabel active={orderBy === 'name'} direction={order} onClick={() => handleRequestSort('name')}>
-                                    Workflow Name
+                                    {t('flowlist.workflowName')}
                                 </TableSortLabel>
                             </StyledTableCell>
-                            <StyledTableCell style={{ width: '15%' }} key='1b'>
-                                <Stack
-                                    direction={{ xs: 'column', sm: 'row' }}
-                                    spacing={1}
-                                    justifyContent='center'
-                                >
-                                    Sandbox Status
+                            <StyledTableCell>
+                                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center'>
+                                    {t('flowlist.sandboxStatus')}
                                 </Stack>
                             </StyledTableCell>
-                            <StyledTableCell style={{ width: '5%' }} key='1a'>
-                                <Stack
-                                    direction={{ xs: 'column', sm: 'row' }}
-                                    spacing={1}
-                                    justifyContent='center'
-                                >
-                                    Sandbox Control
+                            <StyledTableCell>
+                                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center'>
+                                    {t('flowlist.sandboxControl')}
                                 </Stack>
                             </StyledTableCell>
-                            <StyledTableCell style={{ width: '5%' }} key='2'>
-                                <Stack
-                                    direction={{ xs: 'column', sm: 'row' }}
-                                    spacing={1}
-                                    justifyContent='center'
-                                >
-                                    Open Sandbox
+                            <StyledTableCell>
+                                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center'>
+                                    {t('flowlist.openSandbox')}
                                 </Stack>
                             </StyledTableCell>
-                            <StyledTableCell style={{ width: '5%' }} key='3'>
-                                <Stack
-                                    direction={{ xs: 'column', sm: 'row' }}
-                                    spacing={1}
-                                    justifyContent='center'
-                                >
-                                    Observability
+                            <StyledTableCell>
+                                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center'>
+                                    {t('flowlist.observability')}
                                 </Stack>
                             </StyledTableCell>
-                            {/* <StyledTableCell style={{ width: '5%' }} key='5'>
-                                <Stack
-                                    direction={{ xs: 'column', sm: 'row' }}
-                                    spacing={1}
-                                    justifyContent='center'
-                                >
-                                    Deployment Package Generation
-                                </Stack>
-                            </StyledTableCell> */}
-                            <StyledTableCell style={{ width: '5%' }} key='9'>
-                                <Stack
-                                    direction={{ xs: 'column', sm: 'row' }}
-                                    spacing={1}
-                                    justifyContent='center'
-                                >
-                                    1 Click Deployment
+                            <StyledTableCell>
+                                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center'>
+                                    {t('flowlist.oneClickDeploy')}
                                 </Stack>
                             </StyledTableCell>
-                            <StyledTableCell style={{ width: '5%' }} key='6'>
-                                <Stack
-                                    direction={{ xs: 'column', sm: 'row' }}
-                                    spacing={1}
-                                    justifyContent='center'
-                                >
-                                    Actions
+                            <StyledTableCell>
+                                <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center'>
+                                    {t('flowlist.actions')}
                                 </Stack>
                             </StyledTableCell>
-                            <StyledTableCell style={{ width: '15%' }} key='7'>
+                            <StyledTableCell>
                                 <TableSortLabel
                                     active={orderBy === 'updatedDate'}
                                     direction={order}
                                     onClick={() => handleRequestSort('updatedDate')}
                                 >
-                                    Last Modified Date
+                                    {t('flowlist.lastModified')}
                                 </TableSortLabel>
                             </StyledTableCell>
-                            {userRole === 'admin' &&
-                                <StyledTableCell style={{ width: '25%' }} key='8'>
-                                    <Stack
-                                        direction={{ xs: 'column', sm: 'row' }}
-                                        spacing={1}
-                                        justifyContent='center'
-                                    >
-                                        User
+                            {userRole === 'admin' && (
+                                <StyledTableCell>
+                                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center'>
+                                        {t('flowlist.user')}
                                     </Stack>
-                                </StyledTableCell>}
+                                </StyledTableCell>
+                            )}
                         </TableRow>
                     </TableHead>
                     <TableBody>
                         {isLoading ? (
                             <>
-                                <StyledTableRow>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                </StyledTableRow>
-                                <StyledTableRow>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                    <StyledTableCell>
-                                        <Skeleton variant='text' />
-                                    </StyledTableCell>
-                                </StyledTableRow>
+                                {[...Array(2)].map((_, idx) => (
+                                    <StyledTableRow key={idx}>
+                                        {Array(userRole === 'admin' ? 9 : 8).fill(0).map((_, jdx) => (
+                                            <StyledTableCell key={jdx}><Skeleton variant='text' /></StyledTableCell>
+                                        ))}
+                                    </StyledTableRow>
+                                ))}
                             </>
                         ) : (
-                            <>
-                                {sortedData.filter(filterFunction).map((row, index) => (
+                            sortedData.length === 0 ? (
+                                <StyledTableRow>
+                                    <StyledTableCell colSpan={userRole === 'admin' ? 9 : 8} align="center">
+                                        {t('flowlist.noData')}
+                                    </StyledTableCell>
+                                </StyledTableRow>
+                            ) : (
+                                sortedData.filter(filterFunction).map((row, index) => (
                                     <StyledTableRow key={index}>
-                                        <StyledTableCell key='0'>
+                                        <StyledTableCell>
                                             <Tooltip title={row.templateName || row.name}>
-                                                <Typography
-                                                    sx={{
-                                                        display: '-webkit-box',
-                                                        fontSize: 14,
-                                                        fontWeight: 500,
-                                                        WebkitLineClamp: 2,
-                                                        WebkitBoxOrient: 'vertical',
-                                                        textOverflow: 'ellipsis',
-                                                        overflow: 'hidden'
-                                                    }}
-                                                >
-                                                    <Link
-                                                        to={`/${isAgentCanvas ? 'agentcanvas' : isOpeaCanvas ? 'opeacanvas' : 'canvas'}/${row.id}`}
-                                                        style={{ color: '#1162cc', textDecoration: 'none' }}
-                                                    >
+                                                <Typography sx={{ display: '-webkit-box', fontSize: 14, fontWeight: 500, WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', textOverflow: 'ellipsis', overflow: 'hidden' }}>
+                                                    <Link to={`/${isAgentCanvas ? 'agentcanvas' : isOpeaCanvas ? 'opeacanvas' : 'canvas'}/${row.id}`} style={{ color: '#1162cc', textDecoration: 'none' }}>
                                                         {row.templateName || row.name}
                                                     </Link>
                                                 </Typography>
                                             </Tooltip>
                                         </StyledTableCell>
-                                        <StyledTableCell key='1b'>
-                                            <Stack
-                                                direction={{ xs: 'column', sm: 'row' }}
-                                                spacing={1}
-                                                justifyContent='center'
-                                                alignItems='center'
-                                            >
-                                                {row.sandboxStatus === "Getting Ready" || row.sandboxStatus === "Stopping" ? (
-                                                    <CircularProgress size={20} />
-                                                ) : null
-                                                }
-                                                <Typography variant="body2">{row.sandboxStatus}</Typography>
+                                        <StyledTableCell>
+                                            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center' alignItems='center'>
+                                                {(row.sandboxStatus === "Getting Ready" || row.sandboxStatus === "Stopping") ? <CircularProgress size={20} /> : null}
+                                                <Typography variant="body2">{sandboxStatusText(row.sandboxStatus)}</Typography>
                                             </Stack>
                                         </StyledTableCell>
-                                        <StyledTableCell key='1a'>
-                                            <Stack
-                                                direction={{ xs: 'column', sm: 'row' }}
-                                                spacing={1}
-                                                justifyContent='center'
-                                                alignItems='center'
-                                            >
-                                                {row.sandboxStatus === "Ready" || row.sandboxStatus === "Getting Ready" ? (
-                                                    <Tooltip title="Stop Sandbox">
-                                                        <Button
-                                                            color='primary'
-                                                            startIcon={<StopCircleOutlined />}
-                                                            onClick={() => {
-                                                                handleStopSandbox(row.id);
-                                                            }}
-                                                        >
-                                                        </Button>
+                                        <StyledTableCell>
+                                            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center' alignItems='center'>
+                                                {(row.sandboxStatus === "Ready" || row.sandboxStatus === "Getting Ready") ? (
+                                                    <Tooltip title={t('flowlist.stopSandbox')}>
+                                                        <Button color='primary' startIcon={<StopCircleOutlined />} onClick={() => handleStopSandbox(row.id)}></Button>
                                                     </Tooltip>
                                                 ) : (
-                                                    <Tooltip title="Run Sandbox">
-                                                        <Button
-                                                            color='primary'
-                                                            startIcon={<PlayCircleOutline />}
-                                                            onClick={() => {
-                                                                window.open(`/debuglogs/sandbox-${row.id}`, '_blank');
-                                                                handleRunSandbox(row.id);
-                                                            }}
-                                                            disabled={row.sandboxStatus === 'Stopping'}
-                                                        >
-                                                        </Button>
+                                                    <Tooltip title={t('flowlist.openSandbox')}>
+                                                        <Button color='primary' startIcon={<PlayCircleOutline />} onClick={() => handleRunSandbox(row.id)} disabled={row.sandboxStatus === 'Stopping'}></Button>
                                                     </Tooltip>
                                                 )}
                                             </Stack>
                                         </StyledTableCell>
-                                        <StyledTableCell key='2'>
-
-                                            <Stack
-                                                direction={{ xs: 'column', sm: 'row' }}
-                                                spacing={1}
-                                                justifyContent='center'
-                                                alignItems='center'
-                                            >
-                                                <Tooltip title={row.sandboxStatus === 'Ready' ? "Click to open Application UI" : "Sandbox is not running"}>
+                                        <StyledTableCell>
+                                            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center' alignItems='center'>
+                                                <Tooltip title={row.sandboxStatus === 'Ready' ? t('flowlist.openApp') : t('flowlist.sandboxNotRunning')}>
                                                     <span>
-                                                        <Button
-                                                            // variant="outlined"
-                                                            // style={{ width: '20px' }}
-                                                            color={row.sandboxStatus === 'Not Running' ? 'inherit' : 'primary'}
-                                                            startIcon={<OpenInNew />}
-                                                            onClick={() => {
-                                                                // console.log('Button clicked for', row.name || row.id);
-                                                                handleOpenUrl(row.sandboxAppUrl);
-                                                            }}
-                                                            disabled={row.sandboxStatus !== 'Ready'}
-                                                        >
-                                                        </Button>
+                                                        <Button color={row.sandboxStatus === 'Not Running' ? 'inherit' : 'primary'} startIcon={<OpenInNew />}
+                                                            onClick={() => handleOpenUrl(row.sandboxAppUrl)} disabled={row.sandboxStatus !== 'Ready'}></Button>
                                                     </span>
                                                 </Tooltip>
                                             </Stack>
                                         </StyledTableCell>
-                                        {/* Consolidated Observability column */}
-                                        <StyledTableCell key='3'>
-                                            <Stack
-                                                direction={{ xs: 'column', sm: 'row' }}
-                                                spacing={1}
-                                                justifyContent='center'
-                                                alignItems='center'
-                                            >
-                                                <Tooltip title={row.sandboxStatus === 'Ready' ? "Observability Options" : "Sandbox is not running"}>
+                                        <StyledTableCell>
+                                            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center' alignItems='center'>
+                                                <Tooltip title={row.sandboxStatus === 'Ready' ? t('flowlist.observabilityOptions') : t('flowlist.sandboxNotRunning')}>
                                                     <span>
-                                                        <Button
-                                                            color={row.sandboxStatus === 'Not Running' ? 'inherit' : 'primary'}
-                                                            startIcon={<TroubleshootOutlined />}
+                                                        <Button color={row.sandboxStatus === 'Not Running' ? 'inherit' : 'primary'} startIcon={<TroubleshootOutlined />}
                                                             disabled={row.sandboxStatus !== 'Ready'}
                                                             aria-controls={`observability-menu-${row.id}`}
                                                             aria-haspopup="true"
-                                                            onClick={(event) => {
-                                                                setObservabilityAnchorEl(event.currentTarget);
-                                                                setObservabilityRow(row);
-                                                            }}
-                                                        >
+                                                            onClick={(event) => { setObservabilityAnchorEl(event.currentTarget); setObservabilityRow(row); }}>
                                                         </Button>
                                                     </span>
                                                 </Tooltip>
@@ -587,102 +363,41 @@ export const FlowListTable = ({ data, images, isLoading, filterFunction, updateF
                                                     open={Boolean(observabilityAnchorEl) && observabilityRow?.id === row.id}
                                                     onClose={() => setObservabilityAnchorEl(null)}
                                                 >
-                                                    <MenuItem
-                                                        sx={{ color: 'primary.main' }}
-                                                        onClick={() => {
-                                                            handleOpenUrl(row.sandboxGrafanaUrl);
-                                                            setObservabilityAnchorEl(null);
-                                                        }}
-                                                        disabled={row.sandboxStatus !== 'Ready'}
-                                                    >
-                                                        <Analytics fontSize="small" sx={{ mr: 1 }} /> Monitoring Dashboard
+                                                    <MenuItem onClick={() => { handleOpenUrl(row.sandboxGrafanaUrl); setObservabilityAnchorEl(null); }} disabled={row.sandboxStatus !== 'Ready'}>
+                                                        <Analytics fontSize="small" sx={{ mr: 1 }} /> {t('flowlist.monitoringDashboard')}
                                                     </MenuItem>
-                                                    <MenuItem
-                                                        sx={{ color: 'primary.main' }}
-                                                        onClick={() => {
-                                                            handleOpenUrl(row.sandboxTracerUrl);
-                                                            setObservabilityAnchorEl(null);
-                                                        }}
-                                                        disabled={row.sandboxStatus !== 'Ready'}
-                                                    >
-                                                        <ViewTimelineOutlined fontSize="small" sx={{ mr: 1, transform: 'scaleX(-1)' }} /> LLM Call Traces
+                                                    <MenuItem onClick={() => { handleOpenUrl(row.sandboxTracerUrl); setObservabilityAnchorEl(null); }} disabled={row.sandboxStatus !== 'Ready'}>
+                                                        <ViewTimelineOutlined fontSize="small" sx={{ mr: 1, transform: 'scaleX(-1)' }} /> {t('flowlist.llmTraces')}
                                                     </MenuItem>
-                                                    <MenuItem
-                                                        sx={{ color: 'primary.main' }}
-                                                        onClick={() => {
-                                                            handleOpenUrl(row.sandboxDebugLogsUrl);
-                                                            setObservabilityAnchorEl(null);
-                                                        }}
-                                                        disabled={row.sandboxStatus !== 'Ready'}
-                                                    >
-                                                        <TerminalOutlined fontSize="small" sx={{ mr: 1 }} /> Debug Logs
+                                                    <MenuItem onClick={() => { handleOpenUrl(row.sandboxDebugLogsUrl); setObservabilityAnchorEl(null); }} disabled={row.sandboxStatus !== 'Ready'}>
+                                                        <TerminalOutlined fontSize="small" sx={{ mr: 1 }} /> {t('flowlist.debugLogs')}
                                                     </MenuItem>
                                                 </Menu>
                                             </Stack>
                                         </StyledTableCell>
-                                        {/* <StyledTableCell key='5'>
-                                            <Stack
-                                                direction={{ xs: 'column', sm: 'row' }}
-                                                spacing={1}
-                                                justifyContent='center'
-                                                alignItems='center'
-                                            >
-                                                <Tooltip title={"Generate Deployment Package"}>
+                                        <StyledTableCell>
+                                            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} justifyContent='center' alignItems='center'>
+                                                <Tooltip title={t('flowlist.oneClickDeploy')}>
                                                     <span>
-                                                        <Button
-                                                            startIcon={<UnarchiveOutlined />}
-                                                            onClick={() => {
-                                                                handleBuildDeploymentPackage(row.id);
-                                                            }}
-                                                        >
-                                                        </Button>
-                                                    </span>
-                                                </Tooltip>
-                                            </Stack>
-                                        </StyledTableCell> */}
-                                        <StyledTableCell key='9'>
-                                            <Stack
-                                                direction={{ xs: 'column', sm: 'row' }}
-                                                spacing={1}
-                                                justifyContent='center'
-                                                alignItems='center'
-                                            >
-                                                <Tooltip title={"1 Click Deployment"}>
-                                                    <span>
-                                                        <Button
-                                                            startIcon={<InstallDesktopOutlined />}
-                                                            onClick={() => {
-                                                                handleOneClickDeployment(row.id);
-                                                            }}
-                                                        >
-                                                        </Button>
+                                                        <Button startIcon={<InstallDesktopOutlined />} onClick={() => { /* handleOneClickDeployment(row.id); */ }}></Button>
                                                     </span>
                                                 </Tooltip>
                                             </Stack>
                                         </StyledTableCell>
-                                        <StyledTableCell key='6'>
-                                            <Stack
-                                                direction={{ xs: 'column', sm: 'row' }}
-                                                spacing={1}
-                                                justifyContent='center'
-                                                alignItems='center'
-                                            >
-                                                <FlowListMenu
-                                                    isAgentCanvas={isAgentCanvas}
-                                                    chatflow={row}
-                                                    setError={setError}
-                                                    updateFlowsApi={updateFlowsApi}
-                                                    sandboxStatus={row.sandboxStatus}
-                                                    updateSandboxStatus={updateSandboxStatus}
-                                                />
-                                            </Stack>
+                                        <StyledTableCell>
+                                            <FlowListMenu
+                                                isAgentCanvas={isAgentCanvas}
+                                                chatflow={row}
+                                                setError={setError}
+                                                updateFlowsApi={updateFlowsApi}
+                                                sandboxStatus={row.sandboxStatus}
+                                            />
                                         </StyledTableCell>
-                                        <StyledTableCell key='7'>{moment(row.updatedDate).format('MMMM Do, YYYY')}</StyledTableCell>
-                                        {userRole == 'admin' && <StyledTableCell key='8'>{row.userid}</StyledTableCell>}
-
+                                        <StyledTableCell>{moment(row.updatedDate).format('YYYY-MM-DD HH:mm:ss')}</StyledTableCell>
+                                        {userRole === 'admin' && <StyledTableCell>{row.userid}</StyledTableCell>}
                                     </StyledTableRow>
-                                ))}
-                            </>
+                                ))
+                            )
                         )}
                     </TableBody>
                 </Table>
@@ -691,18 +406,18 @@ export const FlowListTable = ({ data, images, isLoading, filterFunction, updateF
                 show={buildDeploymentPackageDialogOpen}
                 dialogProps={buildDeploymentPackageDialogProps}
                 onCancel={() => setBuildDeploymentPackageDialogOpen(false)}
-                onConfirm={downloadDeploymentPackage}
+                onConfirm={() => {}}
             />
             <OneClickDeploymentDialog
                 key={oneClickDeploymentDialogProps.id || 'none'}
                 show={oneClickDeploymentDialogOpen}
                 dialogProps={oneClickDeploymentDialogProps}
                 onCancel={() => setOneClickDeploymentDialogOpen(false)}
-                onConfirm={oneClickDeployment}
+                onConfirm={() => {}}
                 deployStatus={deployStatusById[oneClickDeploymentDialogProps.id]}
-                setDeployStatus={(status) => setDeployStatusForId(oneClickDeploymentDialogProps.id, status)}
+                setDeployStatus={() => {}}
                 deploymentConfig={deployConfigById[oneClickDeploymentDialogProps.id] || { hostname: '', username: '' }}
-                setDeploymentConfig={(config) => setDeployConfigForId(oneClickDeploymentDialogProps.id, config)}
+                setDeploymentConfig={() => {}}
             />
         </>
     )
@@ -718,4 +433,8 @@ FlowListTable.propTypes = {
     isAgentCanvas: PropTypes.bool,
     isOpeaCanvas: PropTypes.bool,
     stopSandboxApi: PropTypes.func,
+    updateFlowToServerApi: PropTypes.func,
+    userRole: PropTypes.string
 }
+
+export default FlowListTable

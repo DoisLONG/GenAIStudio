@@ -1,4 +1,4 @@
-FROM node:23-alpine
+FROM registry.cn-hangzhou.aliyuncs.com/jilimoxing/test:node23alpine
 
 # Install necessary packages
 RUN apk update && apk upgrade && \
@@ -7,6 +7,7 @@ RUN apk update && apk upgrade && \
     build-base cairo-dev pango-dev \
     # Install Chromium
     chromium && \
+    npm config set registry https://registry.npmmirror.com && \
     # Update npm to the latest version
     npm install -g npm@latest && \
     # Install PNPM globally
@@ -25,14 +26,17 @@ WORKDIR /usr/src
 COPY . .
 
 # Install dependencies and build the app
-RUN pnpm config set store-dir .pnpm-store && \
+RUN pnpm config set registry https://registry.npmmirror.com && \
+    pnpm config set store-dir .pnpm-store && \
     pnpm install && \
     pnpm update cross-spawn@7.0.5 && \
     pnpm build && \
     pnpm remove esbuild && \
     rm -rf .pnpm-store && \
     rm -rf /root/.local/share/pnpm && \
-    pnpm prune --prod
+    pnpm prune --prod && \
+    cd packages/server/node_modules/flowise-ui && \
+    pnpm build
 
 EXPOSE 3000
 
